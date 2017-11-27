@@ -1,0 +1,4 @@
+%{"connection": {:hex, :connection, "1.0.4", "a1cae72211f0eef17705aaededacac3eb30e6625b04a6117c1b2db6ace7d5976", [:mix], [], "hexpm"},
+  "fast_xml": {:hex, :fast_xml, "1.1.24", "66f0d9fc52a862013806c1474b3335a818a33156f68f83c6538a17b6a26db422", [:rebar3], [{:p1_utils, "1.0.10", [hex: :p1_utils, repo: "hexpm", optional: false]}], "hexpm"},
+  "p1_utils": {:hex, :p1_utils, "1.0.10", "a6d6927114bac79cf6468a10824125492034af7071adc6ed5ebc4ddb443845d4", [:rebar3], [], "hexpm"},
+  "romeo": {:git, "https://github.com/scrogson/romeo.git", "905945f808fc14ac3a17b4eb58c3edf51f7973e6", []}}
