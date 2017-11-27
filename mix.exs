@@ -23,6 +23,7 @@ defmodule Romemo.Mixfile do
   defp deps do
     [
       #{:romeo, "~> 0.7"}
+      {:ex_crypto, "~> 0.7.1"},
       {:romeo, github: "scrogson/romeo"}
     ]
   end

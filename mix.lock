@@ -1,4 +1,6 @@
 %{"connection": {:hex, :connection, "1.0.4", "a1cae72211f0eef17705aaededacac3eb30e6625b04a6117c1b2db6ace7d5976", [:mix], [], "hexpm"},
+  "ex_crypto": {:hex, :ex_crypto, "0.7.1", "4e799bd1160ad971b36ca5aa6978f8dc96257a20f397d02ea3fce3b06cfdf0ea", [], [{:poison, ">= 2.0.0", [hex: :poison, repo: "hexpm", optional: false]}], "hexpm"},
   "fast_xml": {:hex, :fast_xml, "1.1.24", "66f0d9fc52a862013806c1474b3335a818a33156f68f83c6538a17b6a26db422", [:rebar3], [{:p1_utils, "1.0.10", [hex: :p1_utils, repo: "hexpm", optional: false]}], "hexpm"},
   "p1_utils": {:hex, :p1_utils, "1.0.10", "a6d6927114bac79cf6468a10824125492034af7071adc6ed5ebc4ddb443845d4", [:rebar3], [], "hexpm"},
+  "poison": {:hex, :poison, "3.1.0", "d9eb636610e096f86f25d9a46f35a9facac35609a7591b3be3326e99a0484665", [], [], "hexpm"},
   "romeo": {:git, "https://github.com/scrogson/romeo.git", "905945f808fc14ac3a17b4eb58c3edf51f7973e6", []}}

@@ -1,6 +1,17 @@
 defmodule Romemo do
   @moduledoc """
   Documentation for Romemo.
+
+
+  from the XEP:
+    IdentityKey
+        Per-device public/private key pair used to authenticate communications
+    PreKey
+        A Diffie-Hellman public key, published in bulk and ahead of time
+    PreKeySignalMessage
+        An encrypted message that includes the initial key exchange. This is used to transparently build sessions with the first exchanged message.
+    SignalMessage
+        An encrypted message 
   """
 
   @timeout 5000
@@ -80,20 +91,22 @@ defmodule Romemo do
   defp safe_get_subs(xml, e), do: Romeo.XML.subelements(xml, e)
 
   def handle_info({:stanza, %{from: %{full: from_id}, xml: xml}}, %{conn: conn, roster: roster, jid: jid} = state) when from_id != jid do
-    devices = xml
-              |> safe_get_sub("pubsub")
-              |> safe_get_sub("items")
-              |> safe_get_sub("item")
+    pub_items = xml
+                |> safe_get_sub("pubsub")
+                |> safe_get_sub("items")
+                |> safe_get_sub("item")
+
+    devices = pub_items
               |> safe_get_sub("list")
               |> safe_get_subs("device")
               #|> Enum.map(&(Romeo.XML.attr(&1, "id")))
 
-    bundle = xml
-             |> safe_get_sub("pubsub")
-             |> safe_get_sub("items")
-             |> safe_get_sub("item")
-             |> safe_get_sub("bundle")
-    if devices do
+    prekeys = pub_items
+              |> safe_get_sub("bundle")
+              |> safe_get_sub("prekeys")
+              |> safe_get_subs("preKeyPublic")
+
+    if devices do # ugly, will change
       devices = Enum.map(devices, &(Romeo.XML.attr(&1, "id")))
 
       IO.puts(">>>>>>>>> got devices for: " <> from_id)
@@ -108,8 +121,24 @@ defmodule Romemo do
       {:noreply, %{state | roster: roster}}
     else
       IO.puts(">>>>>>>>> got something else for: " <> from_id)
-      IO.inspect(bundle)
+      IO.inspect(prekeys)
       {:noreply, state}
+
+      ## {:ok, aes_key} = ExCrypto.generate_aes_key(:aes_128, :bytes)
+      ## {:ok, {iv, cipher_text}} = ExCrypto.encrypt(aes_key, "hello hello hello hello hello hello hello hello hello ")
+
+      # test crypto:
+
+      {:ok, aes_128_key} = ExCrypto.generate_aes_key(:aes_128, :bytes)
+      {:ok, iv} = ExCrypto.rand_bytes(16)
+      {:ok, a_data} = ExCrypto.rand_bytes(128)
+      clear_text = "hellooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo"
+
+      {:ok, {ad, payload}} = ExCrypto.encrypt(aes_128_key, a_data, iv, clear_text)
+      {c_iv, cipher_text, cipher_tag} = payload
+
+      msg = mk_msg()
+
     end
   end
 
@@ -166,6 +195,45 @@ defmodule Romemo do
               )]
             )]
           )]
+    )
+  end
+
+  ## <message to='juliet@capulet.lit' from='romeo@montague.lit' id='send1'>
+  ##   <encrypted xmlns='eu.siacs.conversations.axolotl'>
+  ##     <header sid='27183'>
+  ##       <key rid='31415'>BASE64ENCODED...</key>
+  ##       <key prekey="true" rid='12321'>BASE64ENCODED...</key>
+  ##       <!-- ... -->
+  ##       <iv>BASE64ENCODED...</iv>
+  ##     </header>
+  ##     <payload>BASE64ENCODED</payload>
+  ##   </encrypted>
+  ##   <store xmlns='urn:xmpp:hints'/>
+  ## </message>
+
+  # mk_msg("jid", "to", "prekey", "prekey_id", "key", "iv", "cipher_text")
+  def mk_msg(jid, to, prekey, prekey_id, key, iv, cipher_text) do
+    xmlel(name: "message",
+          attrs: [{"from", jid}, {"to", to}, {"type", "get"}, {"id", Romeo.Stanza.id()}],
+          children: [xmlel(
+            name: "encrypted",
+            attrs: [{"xmlns", @ns_omemo}],
+            children:
+            [
+              xmlel(
+                name: "header",
+                attrs: [{"sid", "42"}], # device sender ID
+                children: [xmlel(
+                  name: "key",
+                  attrs: [{"prekey", "true"}, {"rid", prekey_id}],
+                  children: key <> iv # base64
+                  
+                )]),
+              xmlel(
+                name: "payload",
+                attrs: [],
+                children: cipher_text)
+            ])]
     )
   end
 
