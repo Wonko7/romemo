@@ -90,6 +90,22 @@ defmodule Romemo do
   defp safe_get_subs(nil, _), do: nil
   defp safe_get_subs(xml, e), do: Romeo.XML.subelements(xml, e)
 
+  defp update_rooster_with_devices(devices_xml, user, %{conn: conn, roster: roster, jid: jid}) do
+    devices = Enum.map(devices_xml, &(Romeo.XML.attr(&1, "id")))
+
+    IO.puts(">>>>>>>>> got devices for: " <> user)
+    IO.inspect(devices)
+
+    # Ask for a bundle for each of the user's devices:
+    Enum.each(devices, &(romeo_send(conn, mk_get_bundle(jid, user, &1)))) # FIXME: should not be here, temp
+
+    roster = %{roster | user => devices}
+    IO.puts("new roster:")
+    IO.inspect(roster)
+
+    %{roster | user => devices}
+  end
+
   def handle_info({:stanza, %{from: %{full: from_id}, xml: xml}}, %{conn: conn, roster: roster, jid: jid} = state) when from_id != jid do
     pub_items = xml
                 |> safe_get_sub("pubsub")
@@ -106,52 +122,42 @@ defmodule Romemo do
               |> safe_get_sub("prekeys")
               |> safe_get_subs("preKeyPublic")
 
-    if devices do # ugly, will change
-      devices = Enum.map(devices, &(Romeo.XML.attr(&1, "id")))
+    cond do
+      devices -> 
+        {:noreply, %{state | roster: update_rooster_with_devices(devices, from_id, state)}}
 
-      IO.puts(">>>>>>>>> got devices for: " <> from_id)
-      IO.inspect(devices)
+      prekeys -> 
+        IO.puts(">>>>>>>>> got bundle: " <> from_id)
+        IO.inspect(prekeys)
 
-      Enum.each(devices, &(romeo_send(conn, mk_get_bundle(jid, from_id, &1))))
+        prekey_xml = hd(prekeys)
+        prekey_id = Romeo.XML.attr(prekey_xml, "preKeyId")
+        prekey = prekey_xml
+                 |> Romeo.XML.cdata()
+                 |> Base.decode64(ignore: :whitespace)
 
-      roster = %{roster | from_id => devices}
+        ## test crypto:
+        {:ok, aes_128_key} = ExCrypto.generate_aes_key(:aes_128, :bytes)
+        {:ok, iv} = ExCrypto.rand_bytes(16)
+        {:ok, a_data} = ExCrypto.rand_bytes(128)
+        clear_text = "brian is in the kitchen"
 
-      IO.puts("new roster:")
-      IO.inspect(roster)
-      {:noreply, %{state | roster: roster}}
-    else
-      IO.puts(">>>>>>>>> got something else for: " <> from_id)
-      IO.inspect(prekeys)
+        {:ok, {ad, payload}} = ExCrypto.encrypt(aes_128_key, a_data, iv, clear_text)
+        {c_iv, cipher_text, cipher_tag} = payload
 
-      prekey_xml = hd(prekeys)
-      prekey_id = Romeo.XML.attr(prekey_xml, "preKeyId")
-      prekey = prekey_xml
-               |> Romeo.XML.cdata()
-               |> Base.decode64(ignore: :whitespace)
+        msg = mk_msg(jid, from_id, prekey_id, Base.encode64(c_iv), Base.encode64(aes_128_key <> cipher_tag), Base.encode64(cipher_text))
+        #msg = mk_msg(jid, from_id, prekey_id, Base.encode64(c_iv), Base.encode64(aes_128_key <> a_data), Base.encode64(cipher_text))
+        IO.puts(">>>>>>>>> made following message:")
+        IO.inspect(msg)
 
-      ## test crypto:
+        romeo_send(conn, msg)
 
-      {:ok, aes_128_key} = ExCrypto.generate_aes_key(:aes_128, :bytes)
-      {:ok, iv} = ExCrypto.rand_bytes(16)
-      {:ok, a_data} = ExCrypto.rand_bytes(128)
-      clear_text = "brian is in the kitchen"
+        {:noreply, state}
 
-      {:ok, {ad, payload}} = ExCrypto.encrypt(aes_128_key, a_data, iv, clear_text)
-      {c_iv, cipher_text, cipher_tag} = payload
-
-      # mk_msg(jid, to, prekey_id, iv, key_and_cipher_tag, cipher_text)
-      msg = mk_msg(jid, from_id, prekey_id, Base.encode64(c_iv), Base.encode64(aes_128_key <> cipher_tag), Base.encode64(cipher_text))
-      #msg = mk_msg(jid, from_id, prekey_id, Base.encode64(c_iv), Base.encode64(aes_128_key <> a_data), Base.encode64(cipher_text))
-      IO.puts(">>>>>>>>> made following message:")
-      IO.inspect(msg)
-      IO.inspect(byte_size(aes_128_key))
-      IO.inspect(byte_size(cipher_tag))
-      IO.inspect(byte_size(aes_128_key <> cipher_tag))
-
-      romeo_send(conn, msg)
-      romeo_send(conn, Romeo.Stanza.normal(from_id, "oh hi mark"))
-
-      {:noreply, state}
+      true ->
+        IO.puts("do not know what to do with this:")
+        IO.inspect(xml)
+        {:noreply, state}
     end
   end
 
