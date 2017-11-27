@@ -135,11 +135,6 @@ defmodule Romemo do
     {:noreply, state}
   end
 
-  defp romeo_send(conn, msg) do
-    Romeo.Connection.send(conn, msg)
-    conn
-  end
-
   defp update_rooster_with_devices(devices_xml, user, state) do
     devices = Enum.map(devices_xml, &(Romeo.XML.attr(&1, "id")))
 
@@ -158,7 +153,7 @@ defmodule Romemo do
     put_in(state, [:roster, user], Map.new(devices, &({&1, nil})))
   end
 
-  defp update_rooster_with_prekeys(prekeys_xml, user, device, %{conn: conn, roster: roster, jid: jid} = state) do
+  defp update_rooster_with_prekeys(prekeys_xml, user, device, state) do
     IO.puts(">>>>>>>>> got bundle: " <> user)
     IO.inspect(prekeys_xml)
 
@@ -171,30 +166,38 @@ defmodule Romemo do
               |> safe_get_subs("preKeyPublic")
               |> Enum.map(&extract_prekey/1)
 
-    ### <test
-    {prekey_id, prekey_bytes} = hd(prekeys)
-    prekey = Base.decode64(prekey_bytes, ignore: :whitespace)
+    test_crypto(prekeys, user, device, state)
 
-    ## test crypto:
-    {:ok, aes_128_key} = ExCrypto.generate_aes_key(:aes_128, :bytes)
-    {:ok, iv} = ExCrypto.rand_bytes(16)
-    {:ok, a_data} = ExCrypto.rand_bytes(128)
-    clear_text = "brian is in the kitchen"
-
-    {:ok, {ad, payload}} = ExCrypto.encrypt(aes_128_key, a_data, iv, clear_text)
-    {c_iv, cipher_text, cipher_tag} = payload
-
-    msg = mk_msg(jid, user, prekey_id, Base.encode64(c_iv), Base.encode64(aes_128_key <> cipher_tag), Base.encode64(cipher_text))
-    #msg = mk_msg(jid, from_id, prekey_id, Base.encode64(c_iv), Base.encode64(aes_128_key <> a_data), Base.encode64(cipher_text))
-    IO.puts(">>>>>>>>> made following message:")
-    IO.inspect(msg)
-
-    romeo_send(conn, Romeo.Stanza.normal(user, "oh hi mark"))
-    romeo_send(conn, msg)
-    ### test>
-
-    IO.inspect(put_in(state, [:roster, user, device], prekeys))
     put_in(state, [:roster, user, device], prekeys)
+  end
+
+  defp update_dev_bundle(user, device, %{conn: conn, jid: jid} = state) do
+    msg = mk_get_bundle(jid, user, device)
+    id = Romeo.XML.attr(msg, "id")
+    romeo_send(conn, msg)
+
+    receive do
+      {:stanza, %IQ{id: ^id, type: "result"} = iq} ->
+        GenServer.cast(self(), {:device_bundle, iq, user, device})
+    after @timeout ->
+      :ok
+    end
+  end
+
+  ## get & handle roster from hedwig:
+  defp get_roster(conn) do
+    stanza = Romeo.Stanza.get_roster()
+    id = Romeo.XML.attr(stanza, "id")
+    Romeo.Connection.send(conn, stanza)
+
+    receive do
+      {:stanza, %IQ{id: ^id, type: "result"} = iq} ->
+        GenServer.cast(self(), {:roster_results, iq})
+    after @timeout ->
+      :ok
+    end
+
+    conn
   end
 
   defp extract_prekey(prekey_xml), do: {Romeo.XML.attr(prekey_xml, "preKeyId"), Romeo.XML.cdata(prekey_xml)}
@@ -309,33 +312,33 @@ defmodule Romemo do
           )])
   end
 
-  defp update_dev_bundle(user, device, %{conn: conn, jid: jid} = state) do
-    msg = mk_get_bundle(jid, user, device)
-    id = Romeo.XML.attr(msg, "id")
-    romeo_send(conn, msg)
-
-    receive do
-      {:stanza, %IQ{id: ^id, type: "result"} = iq} ->
-        GenServer.cast(self(), {:device_bundle, iq, user, device})
-    after @timeout ->
-      :ok
-    end
-
+  defp romeo_send(conn, msg) do
+    Romeo.Connection.send(conn, msg)
+    conn
   end
 
-  ## get & handle roster from hedwig:
-  defp get_roster(conn) do
-    stanza = Romeo.Stanza.get_roster()
-    id = Romeo.XML.attr(stanza, "id")
-    Romeo.Connection.send(conn, stanza)
+  ### <test
+  defp test_crypto(prekeys, user, device, %{conn: conn, jid: jid} = state) do
+    {prekey_id, prekey_bytes} = hd(prekeys)
+    prekey = Base.decode64(prekey_bytes, ignore: :whitespace)
 
-    receive do
-      {:stanza, %IQ{id: ^id, type: "result"} = iq} ->
-        GenServer.cast(self(), {:roster_results, iq})
-    after @timeout ->
-      :ok
-    end
+    ## test crypto:
+    {:ok, aes_128_key} = ExCrypto.generate_aes_key(:aes_128, :bytes)
+    {:ok, iv} = ExCrypto.rand_bytes(16)
+    {:ok, a_data} = ExCrypto.rand_bytes(128)
+    clear_text = "brian is in the kitchen"
 
-    conn
+    {:ok, {ad, payload}} = ExCrypto.encrypt(aes_128_key, a_data, iv, clear_text)
+    {c_iv, cipher_text, cipher_tag} = payload
+
+    msg = mk_msg(jid, user, prekey_id, Base.encode64(c_iv), Base.encode64(aes_128_key <> cipher_tag), Base.encode64(cipher_text))
+    #msg = mk_msg(jid, from_id, prekey_id, Base.encode64(c_iv), Base.encode64(aes_128_key <> a_data), Base.encode64(cipher_text))
+    IO.puts(">>>>>>>>> made following message:")
+    IO.inspect(msg)
+
+    romeo_send(conn, Romeo.Stanza.normal(user, "oh hi mark"))
+    romeo_send(conn, msg)
+
+    IO.inspect(put_in(state, [:roster, user, device], prekeys))
   end
 end
