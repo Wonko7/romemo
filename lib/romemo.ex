@@ -122,23 +122,36 @@ defmodule Romemo do
     else
       IO.puts(">>>>>>>>> got something else for: " <> from_id)
       IO.inspect(prekeys)
-      {:noreply, state}
 
-      ## {:ok, aes_key} = ExCrypto.generate_aes_key(:aes_128, :bytes)
-      ## {:ok, {iv, cipher_text}} = ExCrypto.encrypt(aes_key, "hello hello hello hello hello hello hello hello hello ")
+      prekey_xml = hd(prekeys)
+      prekey_id = Romeo.XML.attr(prekey_xml, "preKeyId")
+      prekey = prekey_xml
+               |> Romeo.XML.cdata()
+               |> Base.decode64(ignore: :whitespace)
 
-      # test crypto:
+      ## test crypto:
 
       {:ok, aes_128_key} = ExCrypto.generate_aes_key(:aes_128, :bytes)
       {:ok, iv} = ExCrypto.rand_bytes(16)
       {:ok, a_data} = ExCrypto.rand_bytes(128)
-      clear_text = "hellooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo"
+      clear_text = "brian is in the kitchen"
 
       {:ok, {ad, payload}} = ExCrypto.encrypt(aes_128_key, a_data, iv, clear_text)
       {c_iv, cipher_text, cipher_tag} = payload
 
-      msg = mk_msg()
+      # mk_msg(jid, to, prekey_id, iv, key_and_cipher_tag, cipher_text)
+      msg = mk_msg(jid, from_id, prekey_id, Base.encode64(c_iv), Base.encode64(aes_128_key <> cipher_tag), Base.encode64(cipher_text))
+      #msg = mk_msg(jid, from_id, prekey_id, Base.encode64(c_iv), Base.encode64(aes_128_key <> a_data), Base.encode64(cipher_text))
+      IO.puts(">>>>>>>>> made following message:")
+      IO.inspect(msg)
+      IO.inspect(byte_size(aes_128_key))
+      IO.inspect(byte_size(cipher_tag))
+      IO.inspect(byte_size(aes_128_key <> cipher_tag))
 
+      romeo_send(conn, msg)
+      romeo_send(conn, Romeo.Stanza.normal(from_id, "oh hi mark"))
+
+      {:noreply, state}
     end
   end
 
@@ -212,7 +225,7 @@ defmodule Romemo do
   ## </message>
 
   # mk_msg("jid", "to", "prekey", "prekey_id", "key", "iv", "cipher_text")
-  def mk_msg(jid, to, prekey, prekey_id, key, iv, cipher_text) do
+  def mk_msg(jid, to, prekey_id, iv, key_and_cipher_tag, cipher_text) do
     xmlel(name: "message",
           attrs: [{"from", jid}, {"to", to}, {"type", "get"}, {"id", Romeo.Stanza.id()}],
           children: [xmlel(
@@ -223,16 +236,20 @@ defmodule Romemo do
               xmlel(
                 name: "header",
                 attrs: [{"sid", "42"}], # device sender ID
-                children: [xmlel(
+                children:
+                [
+                  xmlel(
                   name: "key",
                   attrs: [{"prekey", "true"}, {"rid", prekey_id}],
-                  children: key <> iv # base64
-                  
-                )]),
+                  children: [xmlcdata(content: key_and_cipher_tag)]),
+                  xmlel(
+                  name: "iv",
+                  children: [xmlcdata(content: iv)])
+                ]),
               xmlel(
                 name: "payload",
                 attrs: [],
-                children: cipher_text)
+                children: [xmlcdata(content: cipher_text)])
             ])]
     )
   end
