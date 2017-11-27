@@ -25,22 +25,28 @@ defmodule Romemo do
   use GenServer
   require Logger
 
-  defmodule State do
-    defstruct conn: nil,
-              jid: "omemot1234@jabber.ccc.de",
-              pwd: "lolilol",
-              jid_mapping: %{},
-              roster: []
-  end
-
+  #defmodule State do
+  #  defstruct conn: nil,
+  #            jid: "omemot1234@jabber.ccc.de",
+  #            pwd: "lolilol",
+  #            jid_mapping: %{},
+  #            roster: []
+  #end
 
 
   def init(_) do
-    %{jid: jid, pwd: pwd} = %State{}
+    state = %{
+      jid: "omemot1234@jabber.ccc.de",
+      pwd: "lolilol",
+      jid_mapping: %{},
+      roster: []
+    }
+    %{jid: jid, pwd: pwd} = state
+
     opts = [jid: jid, password: pwd]
 
     {:ok, conn} = Romeo.Connection.start_link(opts)
-    {:ok, %State{conn: conn}}
+    {:ok, put_in(state, [:conn], conn)}
   end
 
   def handle_info(:connection_ready, %{conn: conn, jid: jid} = state) do
@@ -61,6 +67,7 @@ defmodule Romemo do
               |> safe_get_sub("list")
               |> safe_get_subs("device")
 
+              # FIXME:
     prekeys = pub_items
               |> safe_get_sub("bundle")
               |> safe_get_sub("prekeys")
@@ -68,10 +75,11 @@ defmodule Romemo do
 
     cond do
       devices -> 
-        {:noreply, %{state | roster: update_rooster_with_devices(devices, from_id, state)}}
+        {:noreply, update_rooster_with_devices(devices, from_id, state)}
 
       prekeys -> 
-        {:noreply, %{state | roster: update_rooster_with_prekeys(prekeys, from_id, state)}}
+        IO.puts("I should not be here")
+        {:noreply, state}
 
       true ->
         IO.puts("do not know what to do with this:")
@@ -91,6 +99,10 @@ defmodule Romemo do
     IO.puts("got_info: with from")
     IO.inspect(a)
     {:noreply, state}
+  end
+
+  def handle_cast({:device_bundle, %IQ{xml: xml}, user, device}, state) do
+    {:noreply, update_rooster_with_prekeys(xml, user, device, state)}
   end
 
   def handle_cast({:roster_results, %IQ{xml: xml}}, %{conn: conn, jid: jid} = state) do
@@ -128,32 +140,39 @@ defmodule Romemo do
     conn
   end
 
-  defp update_rooster_with_devices(devices_xml, user, %{conn: conn, roster: roster, jid: jid}) do
+  defp update_rooster_with_devices(devices_xml, user, state) do
     devices = Enum.map(devices_xml, &(Romeo.XML.attr(&1, "id")))
 
     IO.puts(">>>>>>>>> got devices for: " <> user)
     IO.inspect(devices)
 
     # Ask for a bundle for each of the user's devices:
-    Enum.each(devices, &(romeo_send(conn, mk_get_bundle(jid, user, &1)))) # FIXME: should not be here, temp
+    # Enum.each(devices, &(romeo_send(conn, mk_get_bundle(jid, user, &1)))) # FIXME: should not be here, temp
+    Enum.each(devices, &(update_dev_bundle(user, &1, state))) # FIXME: should not be here, temp
 
-    roster = %{roster | user => devices}
-    IO.puts("new roster:")
-    IO.inspect(roster)
+    #roster = %{roster | user => devices}
+    IO.puts("new state:")
+    IO.inspect(put_in(state, [:roster, user], Map.new(devices, &({&1, nil}))))
 
-    #%{roster | user => devices}
-    roster
+
+    put_in(state, [:roster, user], Map.new(devices, &({&1, nil})))
   end
 
-  defp update_rooster_with_prekeys(prekeys_xml, user, %{conn: conn, roster: roster, jid: jid} = state) do
+  defp update_rooster_with_prekeys(prekeys_xml, user, device, %{conn: conn, roster: roster, jid: jid} = state) do
     IO.puts(">>>>>>>>> got bundle: " <> user)
     IO.inspect(prekeys_xml)
 
-    prekeys = Enum.map(prekeys_xml, &extract_prekey/1)
+    prekeys = prekeys_xml
+              |> safe_get_sub("pubsub")
+              |> safe_get_sub("items")
+              |> safe_get_sub("item")
+              |> safe_get_sub("bundle")
+              |> safe_get_sub("prekeys")
+              |> safe_get_subs("preKeyPublic")
+              |> Enum.map(&extract_prekey/1)
 
     ### <test
-    prekey_xml = hd(prekeys_xml)
-    {prekey_id, prekey_bytes} = extract_prekey(hd(prekeys_xml))
+    {prekey_id, prekey_bytes} = hd(prekeys)
     prekey = Base.decode64(prekey_bytes, ignore: :whitespace)
 
     ## test crypto:
@@ -174,7 +193,8 @@ defmodule Romemo do
     romeo_send(conn, msg)
     ### test>
 
-    roster
+    IO.inspect(put_in(state, [:roster, user, device], prekeys))
+    put_in(state, [:roster, user, device], prekeys)
   end
 
   defp extract_prekey(prekey_xml), do: {Romeo.XML.attr(prekey_xml, "preKeyId"), Romeo.XML.cdata(prekey_xml)}
@@ -287,6 +307,20 @@ defmodule Romemo do
               attrs: [{"node", @ns_omemo_bundle <> device}]
             )]
           )])
+  end
+
+  defp update_dev_bundle(user, device, %{conn: conn, jid: jid} = state) do
+    msg = mk_get_bundle(jid, user, device)
+    id = Romeo.XML.attr(msg, "id")
+    romeo_send(conn, msg)
+
+    receive do
+      {:stanza, %IQ{id: ^id, type: "result"} = iq} ->
+        GenServer.cast(self(), {:device_bundle, iq, user, device})
+    after @timeout ->
+      :ok
+    end
+
   end
 
   ## get & handle roster from hedwig:
