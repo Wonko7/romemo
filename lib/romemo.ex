@@ -51,20 +51,46 @@ defmodule Romemo do
     {:noreply, state}
   end
 
-  ## get & handle roster from hedwig:
-  defp get_roster(conn) do
-    stanza = Romeo.Stanza.get_roster()
-    id = Romeo.XML.attr(stanza, "id")
-    Romeo.Connection.send(conn, stanza)
+  def handle_info({:stanza, %{from: %{full: from_id}, xml: xml}}, %{jid: jid} = state) when from_id != jid do
+    pub_items = xml
+                |> safe_get_sub("pubsub")
+                |> safe_get_sub("items")
+                |> safe_get_sub("item")
 
-    receive do
-      {:stanza, %IQ{id: ^id, type: "result"} = iq} ->
-        GenServer.cast(self, {:roster_results, iq})
-    after @timeout ->
-      :ok
+    devices = pub_items
+              |> safe_get_sub("list")
+              |> safe_get_subs("device")
+
+    prekeys = pub_items
+              |> safe_get_sub("bundle")
+              |> safe_get_sub("prekeys")
+              |> safe_get_subs("preKeyPublic")
+
+    cond do
+      devices -> 
+        {:noreply, %{state | roster: update_rooster_with_devices(devices, from_id, state)}}
+
+      prekeys -> 
+        {:noreply, %{state | roster: update_rooster_with_prekeys(prekeys, from_id, state)}}
+
+      true ->
+        IO.puts("do not know what to do with this:")
+        IO.inspect(xml)
+        {:noreply, state}
     end
+  end
 
-    conn
+  def handle_info(a, state) do
+    IO.puts("got_info:")
+    IO.inspect(a)
+    {:noreply, state}
+  end
+
+  ## catch everything:
+  def handle_info(a, _from, state) do
+    IO.puts("got_info: with from")
+    IO.inspect(a)
+    {:noreply, state}
   end
 
   def handle_cast({:roster_results, %IQ{xml: xml}}, %{conn: conn, jid: jid} = state) do
@@ -85,95 +111,6 @@ defmodule Romemo do
     {:noreply, %{state | roster: roster}}
   end
 
-  defp safe_get_sub(nil, _), do: nil
-  defp safe_get_sub(xml, e), do: Romeo.XML.subelement(xml, e)
-  defp safe_get_subs(nil, _), do: nil
-  defp safe_get_subs(xml, e), do: Romeo.XML.subelements(xml, e)
-
-  defp update_rooster_with_devices(devices_xml, user, %{conn: conn, roster: roster, jid: jid}) do
-    devices = Enum.map(devices_xml, &(Romeo.XML.attr(&1, "id")))
-
-    IO.puts(">>>>>>>>> got devices for: " <> user)
-    IO.inspect(devices)
-
-    # Ask for a bundle for each of the user's devices:
-    Enum.each(devices, &(romeo_send(conn, mk_get_bundle(jid, user, &1)))) # FIXME: should not be here, temp
-
-    roster = %{roster | user => devices}
-    IO.puts("new roster:")
-    IO.inspect(roster)
-
-    %{roster | user => devices}
-  end
-
-  def handle_info({:stanza, %{from: %{full: from_id}, xml: xml}}, %{conn: conn, roster: roster, jid: jid} = state) when from_id != jid do
-    pub_items = xml
-                |> safe_get_sub("pubsub")
-                |> safe_get_sub("items")
-                |> safe_get_sub("item")
-
-    devices = pub_items
-              |> safe_get_sub("list")
-              |> safe_get_subs("device")
-              #|> Enum.map(&(Romeo.XML.attr(&1, "id")))
-
-    prekeys = pub_items
-              |> safe_get_sub("bundle")
-              |> safe_get_sub("prekeys")
-              |> safe_get_subs("preKeyPublic")
-
-    cond do
-      devices -> 
-        {:noreply, %{state | roster: update_rooster_with_devices(devices, from_id, state)}}
-
-      prekeys -> 
-        IO.puts(">>>>>>>>> got bundle: " <> from_id)
-        IO.inspect(prekeys)
-
-        prekey_xml = hd(prekeys)
-        prekey_id = Romeo.XML.attr(prekey_xml, "preKeyId")
-        prekey = prekey_xml
-                 |> Romeo.XML.cdata()
-                 |> Base.decode64(ignore: :whitespace)
-
-        ## test crypto:
-        {:ok, aes_128_key} = ExCrypto.generate_aes_key(:aes_128, :bytes)
-        {:ok, iv} = ExCrypto.rand_bytes(16)
-        {:ok, a_data} = ExCrypto.rand_bytes(128)
-        clear_text = "brian is in the kitchen"
-
-        {:ok, {ad, payload}} = ExCrypto.encrypt(aes_128_key, a_data, iv, clear_text)
-        {c_iv, cipher_text, cipher_tag} = payload
-
-        msg = mk_msg(jid, from_id, prekey_id, Base.encode64(c_iv), Base.encode64(aes_128_key <> cipher_tag), Base.encode64(cipher_text))
-        #msg = mk_msg(jid, from_id, prekey_id, Base.encode64(c_iv), Base.encode64(aes_128_key <> a_data), Base.encode64(cipher_text))
-        IO.puts(">>>>>>>>> made following message:")
-        IO.inspect(msg)
-
-        romeo_send(conn, msg)
-
-        {:noreply, state}
-
-      true ->
-        IO.puts("do not know what to do with this:")
-        IO.inspect(xml)
-        {:noreply, state}
-    end
-  end
-
-  ## catch everything:
-  def handle_info(a, _from, state) do
-    IO.puts("got_info: with from")
-    IO.inspect(a)
-    {:noreply, state}
-  end
-
-  def handle_info(a, state) do
-    IO.puts("got_info:")
-    IO.inspect(a)
-    {:noreply, state}
-  end
-
   def handle_cast(a, state) do
     IO.puts("got_cast:")
     IO.inspect(a)
@@ -190,6 +127,62 @@ defmodule Romemo do
     Romeo.Connection.send(conn, msg)
     conn
   end
+
+  defp update_rooster_with_devices(devices_xml, user, %{conn: conn, roster: roster, jid: jid}) do
+    devices = Enum.map(devices_xml, &(Romeo.XML.attr(&1, "id")))
+
+    IO.puts(">>>>>>>>> got devices for: " <> user)
+    IO.inspect(devices)
+
+    # Ask for a bundle for each of the user's devices:
+    Enum.each(devices, &(romeo_send(conn, mk_get_bundle(jid, user, &1)))) # FIXME: should not be here, temp
+
+    roster = %{roster | user => devices}
+    IO.puts("new roster:")
+    IO.inspect(roster)
+
+    #%{roster | user => devices}
+    roster
+  end
+
+  defp update_rooster_with_prekeys(prekeys_xml, user, %{conn: conn, roster: roster, jid: jid} = state) do
+    IO.puts(">>>>>>>>> got bundle: " <> user)
+    IO.inspect(prekeys_xml)
+
+    prekeys = Enum.map(prekeys_xml, &extract_prekey/1)
+
+    ### <test
+    prekey_xml = hd(prekeys_xml)
+    {prekey_id, prekey_bytes} = extract_prekey(hd(prekeys_xml))
+    prekey = Base.decode64(prekey_bytes, ignore: :whitespace)
+
+    ## test crypto:
+    {:ok, aes_128_key} = ExCrypto.generate_aes_key(:aes_128, :bytes)
+    {:ok, iv} = ExCrypto.rand_bytes(16)
+    {:ok, a_data} = ExCrypto.rand_bytes(128)
+    clear_text = "brian is in the kitchen"
+
+    {:ok, {ad, payload}} = ExCrypto.encrypt(aes_128_key, a_data, iv, clear_text)
+    {c_iv, cipher_text, cipher_tag} = payload
+
+    msg = mk_msg(jid, user, prekey_id, Base.encode64(c_iv), Base.encode64(aes_128_key <> cipher_tag), Base.encode64(cipher_text))
+    #msg = mk_msg(jid, from_id, prekey_id, Base.encode64(c_iv), Base.encode64(aes_128_key <> a_data), Base.encode64(cipher_text))
+    IO.puts(">>>>>>>>> made following message:")
+    IO.inspect(msg)
+
+    romeo_send(conn, Romeo.Stanza.normal(user, "oh hi mark"))
+    romeo_send(conn, msg)
+    ### test>
+
+    roster
+  end
+
+  defp extract_prekey(prekey_xml), do: {Romeo.XML.attr(prekey_xml, "preKeyId"), Romeo.XML.cdata(prekey_xml)}
+
+  defp safe_get_sub(nil, _), do: nil
+  defp safe_get_sub(xml, e), do: Romeo.XML.subelement(xml, e)
+  defp safe_get_subs(nil, _), do: nil
+  defp safe_get_subs(xml, e), do: Romeo.XML.subelements(xml, e)
 
   ## there has to be a better way:
   defp mk_pub_dev(jid) do
@@ -294,5 +287,21 @@ defmodule Romemo do
               attrs: [{"node", @ns_omemo_bundle <> device}]
             )]
           )])
+  end
+
+  ## get & handle roster from hedwig:
+  defp get_roster(conn) do
+    stanza = Romeo.Stanza.get_roster()
+    id = Romeo.XML.attr(stanza, "id")
+    Romeo.Connection.send(conn, stanza)
+
+    receive do
+      {:stanza, %IQ{id: ^id, type: "result"} = iq} ->
+        GenServer.cast(self(), {:roster_results, iq})
+    after @timeout ->
+      :ok
+    end
+
+    conn
   end
 end
