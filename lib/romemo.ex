@@ -74,25 +74,43 @@ defmodule Romemo do
     {:noreply, %{state | roster: roster}}
   end
 
+  defp safe_get_sub(nil, _), do: nil
+  defp safe_get_sub(xml, e), do: Romeo.XML.subelement(xml, e)
+  defp safe_get_subs(nil, _), do: nil
+  defp safe_get_subs(xml, e), do: Romeo.XML.subelements(xml, e)
+
   def handle_info({:stanza, %{from: %{full: from_id}, xml: xml}}, %{conn: conn, roster: roster, jid: jid} = state) when from_id != jid do
     devices = xml
-    |> Romeo.XML.subelement("pubsub")
-    |> Romeo.XML.subelement("items")
-    |> Romeo.XML.subelement("item")
-    |> Romeo.XML.subelement("list")
-    |> Romeo.XML.subelements("device")
-    |> Enum.map(&(Romeo.XML.attr(&1, "id")))
+              |> safe_get_sub("pubsub")
+              |> safe_get_sub("items")
+              |> safe_get_sub("item")
+              |> safe_get_sub("list")
+              |> safe_get_subs("device")
+              #|> Enum.map(&(Romeo.XML.attr(&1, "id")))
 
-    IO.puts(">>>>>>>>> got devices for: " <> from_id)
-    IO.inspect(devices)
+    bundle = xml
+             |> safe_get_sub("pubsub")
+             |> safe_get_sub("items")
+             |> safe_get_sub("item")
+             |> safe_get_sub("bundle")
+    if devices do
+      devices = Enum.map(devices, &(Romeo.XML.attr(&1, "id")))
 
-    Enum.each(devices, &(romeo_send(conn, mk_get_bundle(jid, from_id, &1))))
+      IO.puts(">>>>>>>>> got devices for: " <> from_id)
+      IO.inspect(devices)
 
-    roster = %{roster | from_id => devices}
+      Enum.each(devices, &(romeo_send(conn, mk_get_bundle(jid, from_id, &1))))
 
-    IO.puts("new roster:")
-    IO.inspect(roster)
-    {:noreply, %{state | roster: roster}}
+      roster = %{roster | from_id => devices}
+
+      IO.puts("new roster:")
+      IO.inspect(roster)
+      {:noreply, %{state | roster: roster}}
+    else
+      IO.puts(">>>>>>>>> got something else for: " <> from_id)
+      IO.inspect(bundle)
+      {:noreply, state}
+    end
   end
 
   ## catch everything:
