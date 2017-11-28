@@ -19,29 +19,22 @@ defmodule Romemo do
   @ns_omemo_devlist @ns_omemo <> ".devicelist"
   @ns_omemo_bundle @ns_omemo <> ".bundles:"
 
-  @jid_to "rule34@jabber.ccc.de"
-
   use Romeo.XML
   use GenServer
   require Logger
 
-  #defmodule State do
-  #  defstruct conn: nil,
-  #            jid: "omemot1234@jabber.ccc.de",
-  #            pwd: "lolilol",
-  #            jid_mapping: %{},
-  #            roster: []
-  #end
+  defmodule State do
+    defstruct conn: nil,
+              jid: "omemot1234@jabber.ccc.de",
+              pwd: "lolilol",
+              jid_mapping: %{},
+              roster: []
+  end
 
 
   def init(_) do
-    state = %{
-      jid: "omemot1234@jabber.ccc.de",
-      pwd: "lolilol",
-      jid_mapping: %{},
-      roster: []
-    }
-    %{jid: jid, pwd: pwd} = state
+    state = %State{}
+    %{jid: jid, pwd: pwd} = %State{}
 
     opts = [jid: jid, password: pwd]
 
@@ -58,28 +51,16 @@ defmodule Romemo do
   end
 
   def handle_info({:stanza, %{from: %{full: from_id}, xml: xml}}, %{jid: jid} = state) when from_id != jid do
-    pub_items = xml
-                |> safe_get_sub("pubsub")
-                |> safe_get_sub("items")
-                |> safe_get_sub("item")
-
-    devices = pub_items
+    devices = xml
+              |> safe_get_sub("pubsub")
+              |> safe_get_sub("items")
+              |> safe_get_sub("item")
               |> safe_get_sub("list")
               |> safe_get_subs("device")
-
-              # FIXME:
-    prekeys = pub_items
-              |> safe_get_sub("bundle")
-              |> safe_get_sub("prekeys")
-              |> safe_get_subs("preKeyPublic")
 
     cond do
       devices -> 
         {:noreply, update_rooster_with_devices(devices, from_id, state)}
-
-      prekeys -> 
-        IO.puts("I should not be here")
-        {:noreply, state}
 
       true ->
         IO.puts("do not know what to do with this:")
@@ -88,13 +69,13 @@ defmodule Romemo do
     end
   end
 
+  ## catch everything:
   def handle_info(a, state) do
     IO.puts("got_info:")
     IO.inspect(a)
     {:noreply, state}
   end
 
-  ## catch everything:
   def handle_info(a, _from, state) do
     IO.puts("got_info: with from")
     IO.inspect(a)
@@ -115,7 +96,7 @@ defmodule Romemo do
 
     IO.puts("got roster")
     IO.inspect(roster)
-    IO.inspect(Map.keys(roster))
+
     roster
     |> Map.keys()
     |> Enum.each(&(romeo_send(conn, mk_get_dev(jid, &1))))
@@ -142,13 +123,11 @@ defmodule Romemo do
     IO.inspect(devices)
 
     # Ask for a bundle for each of the user's devices:
-    # Enum.each(devices, &(romeo_send(conn, mk_get_bundle(jid, user, &1)))) # FIXME: should not be here, temp
     Enum.each(devices, &(update_dev_bundle(user, &1, state))) # FIXME: should not be here, temp
 
     #roster = %{roster | user => devices}
     IO.puts("new state:")
     IO.inspect(put_in(state, [:roster, user], Map.new(devices, &({&1, nil}))))
-
 
     put_in(state, [:roster, user], Map.new(devices, &({&1, nil})))
   end
